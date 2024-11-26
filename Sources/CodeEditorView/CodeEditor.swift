@@ -36,32 +36,22 @@ public struct CodeEditor {
     ///
     public var wrapText: Bool
 
-    
-    public var scrollable: Bool
-      
     /// Creates a layout configuration.
     ///
     /// - Parameters:
     ///   - showMinimap: Whether to show the minimap if possible. It may not be possible on all supported OSes.
     ///   - wrapText: Whether lines of text may extend beyond the width of the text area or are getting wrapped.
     ///
-    public init(showMinimap: Bool, wrapText: Bool, scrollable: Bool) {
+    public init(showMinimap: Bool, wrapText: Bool) {
       self.showMinimap = showMinimap
       self.wrapText    = wrapText
-      self.scrollable  = scrollable
     }
 
-      public static let standard = LayoutConfiguration(
-        showMinimap: true,
-        wrapText: true,
-        scrollable: true
-      )
+    public static let standard = LayoutConfiguration(showMinimap: true, wrapText: true)
 
     // MARK: For 'RawRepresentable'
 
-      public var rawValue: String {
-          "\(showMinimap ? "t" : "f")\(wrapText ? "t" : "f")\(scrollable ? "t" : "f")"
-      }
+    public var rawValue: String { "\(showMinimap ? "t" : "f")\(wrapText ? "t" : "f")" }
 
     public init?(rawValue: String) {
       guard rawValue.count == 2
@@ -69,7 +59,6 @@ public struct CodeEditor {
 
       self.showMinimap = rawValue[rawValue.startIndex] == "t"
       self.wrapText    = rawValue[rawValue.index(after: rawValue.startIndex)] == "t"
-      self.scrollable  = rawValue[rawValue.endIndex] == "t"
     }
   }
 
@@ -201,7 +190,6 @@ public struct CodeEditor {
   @Binding private var text:     String
   @Binding private var position: Position
   @Binding private var messages: Set<TextLocated<Message>>
-  @Binding private var dynamicViewHeight: CGFloat
 
   /// Creates a fully configured code editor.
   ///
@@ -229,10 +217,8 @@ public struct CodeEditor {
               layout:              LayoutConfiguration = .standard,
               breakUndoCoalescing: PassthroughSubject<(), Never>? = nil,
               setActions:          ((Actions) -> Void)? = nil,
-              setInfo:             ((Info) -> Void)? = nil,
-              dynamicHeight: Binding<CGFloat>? = nil)
+              setInfo:             ((Info) -> Void)? = nil)
   {
-    self._dynamicViewHeight = dynamicHeight ?? .constant(0)
     self._text               = text
     self._position           = position
     self._messages           = messages
@@ -242,17 +228,10 @@ public struct CodeEditor {
     self.setActions          = setActions
     self.setInfo             = setInfo
   }
-    
-    func sizedView(height: Binding<CGFloat>) -> some View {
-        var view = self
-        view._dynamicViewHeight = height
-        return self.id(UUID())
-    }
 
   public class _Coordinator {
     @Binding fileprivate var text:     String
     @Binding fileprivate var position: Position
-    @Binding var dynamicHeight: CGFloat
 
     fileprivate var setActions: ((Actions) -> Void)?
     fileprivate var setInfo:    ((Info) -> Void)?
@@ -282,14 +261,12 @@ public struct CodeEditor {
     init(text: Binding<String>,
          position: Binding<Position>,
          setAction: ((Actions) -> Void)?,
-         setInfo: ((Info) -> Void)?,
-         dynamicHeight: Binding<CGFloat>)
+         setInfo: ((Info) -> Void)?)
     {
       self._text      = text
       self._position  = position
       self.setActions = setAction
       self.setInfo    = setInfo
-      self._dynamicHeight = dynamicHeight
     }
     
     /// Update the bindings and callbacks that parameterise the editor view to be able to update them during a view
@@ -298,12 +275,10 @@ public struct CodeEditor {
     func updateBindings(text: Binding<String>,
                         position: Binding<Position>,
                         setAction: ((Actions) -> Void)?,
-                        setInfo: ((Info) -> Void)?,
-                        dynamicHeight: Binding<CGFloat>)
+                        setInfo: ((Info) -> Void)?)
     {
       self._text      = text
       self._position  = position
-      self._dynamicHeight = dynamicHeight
       self.setActions = setAction
       self.setInfo    = setInfo
     }
@@ -382,7 +357,7 @@ extension CodeEditor: UIViewRepresentable {
     let theme     = context.environment.codeEditorTheme,
         selection = position.selections.first ?? .zero
 
-      context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo, dynamicHeight: $dynamicViewHeight)
+    context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
     if codeView.lastMessages != messages { codeView.update(messages: messages) }
     if text != codeView.text {  // Hoping for the string comparison fast path...
 
@@ -417,20 +392,10 @@ extension CodeEditor: UIViewRepresentable {
       codeView.language                 = language
       context.coordinator.info.language = language.name
     }
-      
-      CodeEditor.recalculateHeight(view: textView, result: $dynamicViewHeight)
   }
-    
-    fileprivate static func recalculateHeight(view: UIScrollView, result: Binding<CGFloat>) {
-        let latestSize = view.contentSize
-                DispatchQueue.main.async {
-                    result.wrappedValue = latestSize.height
-                    print(#function, latestSize.height)
-                }
-        }
 
   public func makeCoordinator() -> Coordinator {
-      return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo, dynamicHeight: $dynamicViewHeight)
+    return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
   }
 
   public final class Coordinator: _Coordinator {
@@ -462,7 +427,8 @@ extension CodeEditor: UIViewRepresentable {
 
 extension CodeEditor: NSViewRepresentable {
 
-    public func makeNSView(context: Context) -> NSView {
+  public func makeNSView(context: Context) -> NSScrollView {
+
     // We pass this function down into `CodeStorageDelegate` to facilitate updates to the `text` binding. For details,
     // see [Note Propagating text changes into SwiftUI].
     func setText(_ text: String) {
@@ -478,47 +444,28 @@ extension CodeEditor: NSViewRepresentable {
       context.coordinator.updatingView = false
     }
 
-        // Set up text view with gutter
-        let codeView = CodeView(frame: .zero,
-                                with: language,
-                                viewLayout: layout,
-                                theme: context.environment.codeEditorTheme,
-                                setText: setText(_:),
-                                setMessages: { messages = $0 })
-        codeView.isVerticallyResizable   = true
-        codeView.isHorizontallyResizable = false
-        codeView.autoresizingMask        = .width
-        
-        let containerView: NSView = {
-            if layout.scrollable {
-                let scrollView = NSScrollView(frame: .zero)
-                scrollView.borderType          = .noBorder
-                scrollView.hasVerticalScroller = true
-                scrollView.hasHorizontalRuler  = false
-                scrollView.autoresizingMask    = [.width, .height]
-                scrollView.documentView = codeView
-                // The minimap needs to be vertically positioned in dependence on the scroll position of the main code view by
-                // observing the bounds of the content view.
-                context.coordinator.boundsChangedNotificationObserver
-                = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
-                                                         object: scrollView.contentView,
-                                                         queue: .main){ [weak scrollView] _ in
-                    
-                    // FIXME: we would like to get less fine-grained updates here, but `NSScrollView.didEndLiveScrollNotification` doesn't happen when moving the cursor around
-                    if let scrollView {
-                        context.coordinator.scrollPositionDidChange(scrollView)
-                    }
-                }
-                return scrollView
-            } else {
-                return codeView
-            }
-        }()
+    // Set up scroll view
+    let scrollView = NSScrollView(frame: CGRect(x: 0, y: 0, width: 100, height: 40))
+    scrollView.borderType          = .noBorder
+    scrollView.hasVerticalScroller = true
+    scrollView.hasHorizontalRuler  = false
+    scrollView.autoresizingMask    = [.width, .height]
+
+    // Set up text view with gutter
+    let codeView = CodeView(frame: CGRect(x: 0, y: 0, width: 100, height: 40),
+                            with: language,
+                            viewLayout: layout,
+                            theme: context.environment.codeEditorTheme,
+                            setText: setText(_:),
+                            setMessages: { messages = $0 })
+    codeView.isVerticallyResizable   = true
+    codeView.isHorizontallyResizable = false
+    codeView.autoresizingMask        = .width
 
     context.coordinator.info.language = language.name
 
     // Embed text view in scroll view
-    
+    scrollView.documentView = codeView
 
     // NB: We are not setting `codeView.text` here. That will happen via `updateNSView(:)`.
     // This implies that we must take care to not report that initial updates as a change to any connected language
@@ -549,8 +496,20 @@ extension CodeEditor: NSViewRepresentable {
                                                                         with: codeStorageDelegate.lineMap)
     }
 
-    (containerView as? NSScrollView)?.verticalScrollPosition = position.verticalScrollPosition
+    scrollView.verticalScrollPosition = position.verticalScrollPosition
 
+    // The minimap needs to be vertically positioned in dependence on the scroll position of the main code view by
+    // observing the bounds of the content view.
+    context.coordinator.boundsChangedNotificationObserver
+      = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                                               object: scrollView.contentView,
+                                               queue: .main){ [weak scrollView] _ in
+
+          // FIXME: we would like to get less fine-grained updates here, but `NSScrollView.didEndLiveScrollNotification` doesn't happen when moving the cursor around
+          if let scrollView {
+            context.coordinator.scrollPositionDidChange(scrollView)
+          }
+        }
 
     // Report the initial message set
     DispatchQueue.main.async{ codeView.update(messages: messages) }
@@ -575,54 +534,49 @@ extension CodeEditor: NSViewRepresentable {
         coordinator.actions.language.extraActions = actions
       }
 
-    return containerView
+    return scrollView
   }
 
-    public func updateNSView(_ view: NSView, context: Context) {
-        let scrollView = view as? NSScrollView
-        guard let codeView = (scrollView?.documentView ?? view) as? CodeView else { return }
-        context.coordinator.updatingView = true
-        defer {
-            context.coordinator.updatingView = false
+  public func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    guard let codeView = scrollView.documentView as? CodeView else { return }
+    context.coordinator.updatingView = true
+    defer {
+      context.coordinator.updatingView = false
+    }
+
+    codeView.breakUndoCoalescing()
+
+    let theme      = context.environment.codeEditorTheme,
+        selections = position.selections.map{ NSValue(range: $0) }
+
+    context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
+    if codeView.lastMessages != messages { codeView.update(messages: messages) }
+    if text != codeView.string {  // Hoping for the string comparison fast path...
+
+      if language.languageService !== codeView.language.languageService {
+        (codeView.optCodeStorage?.delegate as? CodeStorageDelegate)?.skipNextChangeNotificationToLanguageService = true
+      }
+      codeView.string = text
+      // FIXME: Stupid hack to force redrawing when the language doesn't change. (A language change already forces
+      // FIXME: redrawing.)
+      if language == codeView.language {
+        Task { @MainActor in
+          codeView.font = theme.font
         }
-        
-        codeView.breakUndoCoalescing()
-        
-        let theme      = context.environment.codeEditorTheme,
-            selections = position.selections.map{ NSValue(range: $0) }
-        
-        context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo, dynamicHeight: $dynamicViewHeight)
-        if codeView.lastMessages != messages { codeView.update(messages: messages) }
-        if text != codeView.string {  // Hoping for the string comparison fast path...
-            
-            if language.languageService !== codeView.language.languageService {
-                (codeView.optCodeStorage?.delegate as? CodeStorageDelegate)?.skipNextChangeNotificationToLanguageService = true
-            }
-            codeView.string = text
-            // FIXME: Stupid hack to force redrawing when the language doesn't change. (A language change already forces
-            // FIXME: redrawing.)
-            if language == codeView.language {
-                Task { @MainActor in
-                    codeView.font = theme.font
-                }
-            }
-            
-        }
-        if selections != codeView.selectedRanges {
-            codeView.selectedRanges = selections
-            if let codeStorageDelegate = codeView.optCodeStorage?.delegate as? CodeStorageDelegate
-            {
-                context.coordinator.info.selectionSummary = Info.SelectionSummary(selections: position.selections,
-                                                                                  with: codeStorageDelegate.lineMap)
-            }
-        }
-        
-        if let scrollView {
-            if abs(position.verticalScrollPosition - scrollView.verticalScrollPosition) > 0.0001 {
-                scrollView.verticalScrollPosition = position.verticalScrollPosition
-            }
-        }
-    
+      }
+
+    }
+    if selections != codeView.selectedRanges {
+      codeView.selectedRanges = selections
+      if let codeStorageDelegate = codeView.optCodeStorage?.delegate as? CodeStorageDelegate
+      {
+        context.coordinator.info.selectionSummary = Info.SelectionSummary(selections: position.selections,
+                                                                          with: codeStorageDelegate.lineMap)
+      }
+    }
+    if abs(position.verticalScrollPosition - scrollView.verticalScrollPosition) > 0.0001 {
+      scrollView.verticalScrollPosition = position.verticalScrollPosition
+    }
     if theme.id != codeView.theme.id { codeView.theme = theme }
     if layout != codeView.viewLayout { codeView.viewLayout = layout }
     // Equality on language configurations implies the same name and the same language service.
@@ -630,20 +584,10 @@ extension CodeEditor: NSViewRepresentable {
       codeView.language                 = language
       context.coordinator.info.language = language.name
     }
-        
-        CodeEditor.recalculateHeight(view: view, result: $dynamicViewHeight)
   }
-    
-    fileprivate static func recalculateHeight(view: NSView, result: Binding<CGFloat>) {
-        let latestSize = view.bounds
-                DispatchQueue.main.async {
-                    result.wrappedValue = latestSize.height
-                    print(#function, latestSize.height)
-                }
-        }
 
   public func makeCoordinator() -> Coordinator {
-      return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo, dynamicHeight: $dynamicViewHeight)
+    return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
   }
 
   public final class Coordinator: _Coordinator {
@@ -747,146 +691,9 @@ extension CodeEditor.Position: RawRepresentable, Codable {
 struct CodeEditor_Previews: PreviewProvider {
 
   static var previews: some View {
-      CodeEditor(text: .constant("""
-        import SwiftUI
-        import CodeEditor
-        import LanguageSupport
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        
-                struct ContentView: View {
-                  @State private var text:     String                    = "My awesome code..."
-                  @State private var position: CodeEditor.Position       = CodeEditor.Position()
-                  @State private var messages: Set<TextLocated<Message>> = Set()
-                
-                  @Environment(.colorScheme) private var colorScheme: ColorScheme
-                
-                  var body: some View {
-                    CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-                      .environment(.codeEditorTheme,
-                                   colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-                  }
-                }
-        """),
+    CodeEditor(text: .constant("-- Hello World!"),
                position: .constant(CodeEditor.Position()),
                messages: .constant(Set()),
-                 language: .swift())
-      ScrollView {
-          Text("Header text")
-          SizedCodeEditor(text: .constant("""
-        import SwiftUI
-        import CodeEditor
-        import LanguageSupport
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        
-        struct ContentView: View {
-          @State private var text:     String                    = "My awesome code..."
-          @State private var position: CodeEditor.Position       = CodeEditor.Position()
-          @State private var messages: Set<TextLocated<Message>> = Set()
-        
-          @Environment(.colorScheme) private var colorScheme: ColorScheme
-        
-          var body: some View {
-            CodeEditor(text: $text, position: $position, messages: $messages, language: .swift)
-              .environment(.codeEditorTheme,
-                           colorScheme == .dark ? Theme.defaultDark : Theme.defaultLight)
-          }
-        }
-        """),
-                     position: .constant(CodeEditor.Position()),
-                     messages: .constant(Set()),
-                     language: .swift(),
-                     layout: .init(showMinimap: true, wrapText: true, scrollable: false))
-          Text("Bottom text")
-      }
+               language: .haskell())
   }
 }
-
-
-//struct CodeEditor_Previews: PreviewProvider {
-//    
-//    static var previews: some View {
-//        
-//    }
-//}
