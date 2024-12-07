@@ -190,6 +190,7 @@ public struct CodeEditor {
   @Binding private var text:     String
   @Binding private var position: Position
   @Binding private var messages: Set<TextLocated<Message>>
+  @Binding private var viewHeight: CGFloat
 
   /// Creates a fully configured code editor.
   ///
@@ -217,11 +218,13 @@ public struct CodeEditor {
               layout:              LayoutConfiguration = .standard,
               breakUndoCoalescing: PassthroughSubject<(), Never>? = nil,
               setActions:          ((Actions) -> Void)? = nil,
-              setInfo:             ((Info) -> Void)? = nil)
+              setInfo:             ((Info) -> Void)? = nil,
+              viewHeight:          Binding<CGFloat>? = nil)
   {
     self._text               = text
     self._position           = position
     self._messages           = messages
+    self._viewHeight         = viewHeight ?? .constant(.zero)
     self.language            = language
     self.layout              = layout
     self.breakUndoCoalescing = breakUndoCoalescing
@@ -232,6 +235,7 @@ public struct CodeEditor {
   public class _Coordinator {
     @Binding fileprivate var text:     String
     @Binding fileprivate var position: Position
+    @Binding private var viewHeight: CGFloat
 
     fileprivate var setActions: ((Actions) -> Void)?
     fileprivate var setInfo:    ((Info) -> Void)?
@@ -261,12 +265,14 @@ public struct CodeEditor {
     init(text: Binding<String>,
          position: Binding<Position>,
          setAction: ((Actions) -> Void)?,
-         setInfo: ((Info) -> Void)?)
+         setInfo: ((Info) -> Void)?,
+         viewHeight: Binding<CGFloat>)
     {
-      self._text      = text
-      self._position  = position
-      self.setActions = setAction
-      self.setInfo    = setInfo
+      self._text       = text
+      self._position   = position
+      self._viewHeight = viewHeight
+      self.setActions  = setAction
+      self.setInfo     = setInfo
     }
     
     /// Update the bindings and callbacks that parameterise the editor view to be able to update them during a view
@@ -275,12 +281,14 @@ public struct CodeEditor {
     func updateBindings(text: Binding<String>,
                         position: Binding<Position>,
                         setAction: ((Actions) -> Void)?,
-                        setInfo: ((Info) -> Void)?)
+                        setInfo: ((Info) -> Void)?,
+                        viewHeight: Binding<CGFloat>)
     {
-      self._text      = text
-      self._position  = position
-      self.setActions = setAction
-      self.setInfo    = setInfo
+      self._text       = text
+      self._position   = position
+      self._viewHeight = viewHeight
+      self.setActions  = setAction
+      self.setInfo     = setInfo
     }
   }
 }
@@ -357,7 +365,7 @@ extension CodeEditor: UIViewRepresentable {
     let theme     = context.environment.codeEditorTheme,
         selection = position.selections.first ?? .zero
 
-    context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
+      context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo, viewHeight: $viewHeight)
     if codeView.lastMessages != messages { codeView.update(messages: messages) }
     if text != codeView.text {  // Hoping for the string comparison fast path...
 
@@ -395,7 +403,7 @@ extension CodeEditor: UIViewRepresentable {
   }
 
   public func makeCoordinator() -> Coordinator {
-    return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
+      return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo, viewHeight: $viewHeight)
   }
 
   public final class Coordinator: _Coordinator {
@@ -549,7 +557,7 @@ extension CodeEditor: NSViewRepresentable {
     let theme      = context.environment.codeEditorTheme,
         selections = position.selections.map{ NSValue(range: $0) }
 
-    context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
+    context.coordinator.updateBindings(text: $text, position: $position, setAction: setActions, setInfo: setInfo, viewHeight: $viewHeight)
     if codeView.lastMessages != messages { codeView.update(messages: messages) }
     if text != codeView.string {  // Hoping for the string comparison fast path...
 
@@ -584,10 +592,21 @@ extension CodeEditor: NSViewRepresentable {
       codeView.language                 = language
       context.coordinator.info.language = language.name
     }
+    
+    CodeEditor.recalculateHeight(view: scrollView, result: $viewHeight)
   }
+    
+    fileprivate static func recalculateHeight(view: NSScrollView, result: Binding<CGFloat>) {
+        let latestSize = view.documentView?.bounds.height ?? 0
+        guard latestSize != .zero, latestSize != result.wrappedValue else { return }
+        DispatchQueue.main.async {
+            result.wrappedValue = latestSize
+            print(#function, latestSize)
+        }
+    }
 
   public func makeCoordinator() -> Coordinator {
-    return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo)
+    return Coordinator(text: $text, position: $position, setAction: setActions, setInfo: setInfo, viewHeight: $viewHeight)
   }
 
   public final class Coordinator: _Coordinator {
